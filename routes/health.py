@@ -1,6 +1,6 @@
 import logging
 from flask import Blueprint, render_template, request, jsonify
-from services.youtube_service import get_youtube_video_info
+from services.youtube_service import get_youtube_video_info, fetch_oembed_metadata, fetch_page_meta_description, fetch_transcript, extract_video_id
 from services.gemini_service import analyze_novel_info
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,28 @@ def health_check():
         "status": "online",
         "service": "YouTube Novel Finder",
         "version": "1.2.0"
+    }), 200
+
+@health_bp.route("/api/debug_yt", methods=["GET", "POST"])
+def debug_yt():
+    """除錯專用：回傳每個步驟抓到的原始資料"""
+    url = request.args.get("url") or (request.json or {}).get("url") or "https://youtu.be/6S_C1tA_Ljs"
+    video_id = extract_video_id(url)
+    clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+    
+    oembed = fetch_oembed_metadata(clean_url) if clean_url else {}
+    html_desc = fetch_page_meta_description(clean_url) if clean_url else ""
+    transcript = fetch_transcript(video_id) if video_id else ""
+    full_info = get_youtube_video_info(url)
+    
+    return jsonify({
+        "input_url": url,
+        "video_id": video_id,
+        "clean_url": clean_url,
+        "oembed_result": oembed,
+        "html_desc_len": len(html_desc),
+        "transcript_len": len(transcript),
+        "full_info_result": full_info
     }), 200
 
 @health_bp.route("/api/search", methods=["POST"])
