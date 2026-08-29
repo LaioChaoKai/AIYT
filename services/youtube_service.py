@@ -1,12 +1,18 @@
 import re
 import logging
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+import requests
+from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
 
 logger = logging.getLogger(__name__)
 
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+}
+
 def extract_video_id(url: str) -> str | None:
-    """從各種 YouTube URL 格式中解析出 11 位數的 Video ID"""
+    """從各種 YouTube URL 格式中解析出 11 位數的 Video ID (包含 ?si= 帶追蹤參數網址)"""
     if not url:
         return None
         
@@ -24,15 +30,39 @@ def extract_video_id(url: str) -> str | None:
             
     return None
 
-def fetch_video_metadata(url: str) -> dict:
-    """使用 yt-dlp 抓取影片標題、說明欄與作者"""
-    ydl_opts = {
-        'skip_download': True,
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': False
-    }
-    
+def fetch_oembed_metadata(clean_url: str) -> dict:
+    """YouTube 官方 oEmbed API (免 Key、不封鎖 Cloud IP，回傳標題與作者)"""
+    oembed_url = f"https://www.youtube.com/oembed?url={clean_url}&format=json"
+    try:
+        resp = requests.get(oembed_url, headers=HEADERS, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "title": data.get("title", ""),
+                "uploader": data.get("author_name", "")
+            }
+    except Exception as e:
+        logger.warning(f"oEmbed API 抓取失敗: {e}")
+    return {}
+
+def fetch_page_meta_description(clean_url: str) -> str:
+    """從 YouTube 網頁 HTML meta 標籤提取 Description"""
+    try:
+        resp = requests.get(clean_url, headers=HEADERS, timeout=5)
+        if resp.status_code == 200:
+            html = resp.text
+            # 尋找 og:description 或 description
+            match = re.search(r'<meta\s+(?:name|property)=["\']og:description["\']\s+content=["\'](.*?)["\']', html, re.IGNORECASE)
+            if not match:
+                match = re.search(r'<meta\s+name=["\']description["\']\s+content=["\'](.*?)["\']', html, re.IGNORECASE)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        logger.warning(f"HTML Description 提取失敗: {e}")
+    return ""
+
+def fetch_video_metadata(clean_url: str) -> dict:
+    """整合提取：優先使用 yt-dlp，失敗時自動切換至 oEmbed 與 HTML Scraper 備援"""
     metadata = {
         'title': '',
         'description': '',
@@ -40,17 +70,38 @@ def fetch_video_metadata(url: str) -> dict:
         'tags': []
     }
     
+    # 1. 嘗試 yt-dlp 抓取完整資訊
+    ydl_opts = {
+        'skip_download': True,
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'user_agent': HEADERS['User-Agent'],
+        'nocheckcertificate': True
+    }
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(clean_url, download=False)
             if info:
                 metadata['title'] = info.get('title', '')
                 metadata['description'] = info.get('description', '')
                 metadata['uploader'] = info.get('uploader', '')
                 metadata['tags'] = info.get('tags', []) or []
     except Exception as e:
-        logger.error(f"yt-dlp 提取元數據失敗: {e}")
-        
+        logger.warning(f"yt-dlp 提取失敗，切換至備援機制: {e}")
+
+    # 2. 備援：若標題為空，使用 YouTube 官方 oEmbed API
+    if not metadata['title']:
+        oembed = fetch_oembed_metadata(clean_url)
+        if oembed.get('title'):
+            metadata['title'] = oembed['title']
+            metadata['uploader'] = oembed.get('uploader', '')
+
+    # 3. 備援：若說明欄為空，從 HTML Meta 標籤抓取
+    if not metadata['description']:
+        metadata['description'] = fetch_page_meta_description(clean_url)
+
     return metadata
 
 def fetch_transcript(video_id: str) -> str:
@@ -84,7 +135,6 @@ def fetch_transcript(video_id: str) -> str:
                     
         if transcript:
             data = transcript.fetch()
-            # 拼接字幕內容，取前 500 句（涵蓋大部分影片精華）
             full_text = " ".join([item.get('text', '') for item in data[:500]])
             return full_text
             
@@ -99,11 +149,11 @@ def get_youtube_video_info(url: str) -> dict:
     """
     video_id = extract_video_id(url)
     if not video_id:
-        return {"error": "無法識別的 YouTube 網址格式"}
+        return {"error": "無法識別的 YouTube 網址格式，請提供正確的 YouTube 影片連結。"}
         
     clean_url = f"https://www.youtube.com/watch?v={video_id}"
     
-    # 抓取標題與說明
+    # 抓取標題與說明 (雙重備援)
     metadata = fetch_video_metadata(clean_url)
     
     # 抓取字幕
