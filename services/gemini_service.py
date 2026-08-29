@@ -6,10 +6,10 @@ logger = logging.getLogger(__name__)
 
 def analyze_novel_info(video_data: dict) -> str:
     """
-    從影片標題、說明欄與字幕中解析小說名稱與詳細資訊。
-    透過 Google Search Grounding 聯網搜尋工具，比對番茄小說、起點中文網等資料庫，
-    精準找出原著小說名稱、作者、首發平台與書籍 ID。
+    從影片網址、標題、說明欄與字幕中解析小說名稱與詳細資訊。
+    透過 Google Search Grounding 聯網搜尋工具，針對 YouTube 網址與標題進行實時比對。
     """
+    url = video_data.get("url", "")
     title = video_data.get("title", "")
     description = video_data.get("description", "")
     transcript = video_data.get("transcript", "")
@@ -20,8 +20,9 @@ def analyze_novel_info(video_data: dict) -> str:
 
     prompt = f"""
 你一位精通華文網路小說（起點、番茄小說、七貓、晉江等）、漫畫與動漫解說的資深專家。
-請務必使用【 Google 聯網搜尋 (Google Search) 】工具搜尋網路資料庫（如番茄小說、起點中文網、百度等），精準比對出這部影片解說對應的【原始小說名稱】與【書籍資訊】。
+請務必使用【 Google 聯網搜尋 (Google Search) 】工具，針對這支【 YouTube 影片網址 】：{url} 與【 影片標題 】：{title}，搜尋全網資料庫（包含 YouTube 紀錄、番茄小說、起點中文網、百度等），精準比對出這部影片解說對應的【原始小說名稱】與【書籍資訊】。
 
+【YouTube 影片網址】：{url}
 【影片標題】：{title}
 【創作者/頻道】：{uploader}
 【影片說明欄】：
@@ -33,7 +34,7 @@ def analyze_novel_info(video_data: dict) -> str:
 ---
 
 【搜尋與解析指令】：
-1. 請搜尋影片標題中的完整對白或關鍵字（例如：「廢柴新生？鏽刀一吸，測試儀當場冒煙！」、「嬴正」、「天道酬勤系統」），在番茄小說或起點中文網上尋找 matches。
+1. 請以【YouTube 影片網址】{url} 與標題對白關鍵字（例如：「廢柴新生？鏽刀一吸，測試儀當場冒煙！」、「嬴正」、「天道酬勤系統」）在 Google 搜尋該影片對應的網路數據與番茄小說 / 起點中文網頁面。
 2. 自動修復語音轉文字的拼音與諧音錯字（例如：「迎正/銀正」校正為「嬴正」；「天道仇勤」校正為「天道酬勤」）。
 3. 必須透過網路搜尋結果給出準確的原著小說名稱、作者、主角名字、首發平台（如番茄小說）及書籍 ID。
 
