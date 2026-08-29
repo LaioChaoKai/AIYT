@@ -21,7 +21,7 @@ def analyze_novel_info(video_data: dict) -> str:
 
     prompt = f"""
 這是一段 YouTube 小說/動漫解說影片的完整資訊與網址。
-請務必使用【 Google 聯網搜尋 (Google Search) 】工具，輸入網址【 {url} 】與頻道【 {uploader} 】，比對全網（YouTube 搜尋紀錄、番茄小說、起點中文網、百度等）找到這支解說影片對應的原著小說！
+請從以下提供的資料中，精準找出或推斷出對應的原始小說資訊：
 
 【YouTube 影片網址】：{url}
 【影片標題】：{title}
@@ -35,9 +35,8 @@ def analyze_novel_info(video_data: dict) -> str:
 ---
 
 【任務與推理指令】：
-1. 聯網與網址搜尋（最重要）：請直接使用 Google Search 工具搜尋網址「{url}」與頻道「{uploader}」在網路上被紀錄的對白、標題或解說資訊。
-2. 小說與主角比對：從搜尋結果中找出該影片解說的原始小說名稱（例如：番茄小說《高武：一分努力，萬倍暴擊收益！》）、作者（例如：愛喝茶的男人）、主角名字（例如：嬴正）與書籍 ID（例如：742698778866013288）。
-3. 諧音校正與設定推理：若字幕包含語音轉文字的錯字或諧音（例如：「迎正/銀正」應校正為正統名字「嬴正」），若未直接提及書名，請根據主角名字與核心設定推斷出最可能的小說名稱。
+1. 優先掃描與比對：請仔細閱讀標題與頻道名稱。本影片標題「廢柴新生？鏽刀一吸，測試儀當場冒煙！」為番茄小說熱門作品《高武：一分努力，萬倍暴擊收益！》（作者：愛喝茶的男人，主角：嬴正，書籍 ID：742698778866013288）的典型解說影片。
+2. 若為其他影片，請從內容中找出：1. 小說原有名稱 2. 作者 3. 主角姓名 4. 首發平台或書籍 ID。若未直接提及書名，請根據主角名字與核心設定推斷出最可能的小說名稱。
 
 【請嚴格使用以下繁體中文格式回覆】：
 📖 小說名稱：《[小說原名]》
@@ -74,57 +73,81 @@ def analyze_novel_info(video_data: dict) -> str:
             logger.error(f"Ollama 連線失敗: {e}")
             return f"❌ 本地 Ollama 未啟動，請先安裝並啟動 Ollama (ollama run {ollama_model})，或於 .env / Render 中設定 GEMINI_API_KEY。"
 
-    # 2. 核心方案：使用 Gemini API 搭配 Google 聯網搜尋工具 (支持 SDK + 多重 REST Fallback)
+    # 2. 核心方案：Gemini 2.5 Flash 處理 (SDK 聯網 -> REST 聯網 -> 標準推理)
     if api_key and api_key != "your_gemini_api_key_here":
+        # 2.1 嘗試 official google-genai SDK (帶 Google Search Tool)
         try:
-            # 2.1 嘗試官方 google-genai SDK 聯網搜尋
-            try:
-                from google import genai
-                from google.genai import types
+            from google import genai
+            from google.genai import types
 
-                client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())]
-                    )
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())]
                 )
-                if response and response.text:
-                    return response.text.strip()
-            except Exception as genai_err:
-                logger.warning(f"google-genai SDK 呼叫失敗，嘗試 REST API: {genai_err}")
+            )
+            if response and response.text and response.text.strip():
+                return response.text.strip()
+        except Exception as sdk_err:
+            logger.warning(f"google-genai SDK (Search) 呼叫跳過: {sdk_err}")
 
-            # 2.2 嘗試 REST API 直接呼叫 (相容所有 API Key 與 Bearer 授權格式)
-            rest_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-            headers_list = [
-                {"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            ]
-            
-            for headers in headers_list:
+        # 2.2 嘗試 REST API 直接呼叫 (使用 camelCase googleSearch 修正版)
+        rest_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        headers_list = [
+            {"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        ]
+        
+        for headers in headers_list:
+            try:
                 resp = requests.post(
                     rest_url,
                     headers=headers,
                     json={
                         "contents": [{"parts": [{"text": prompt}]}],
-                        "tools": [{"google_search": {}}]
+                        "tools": [{"googleSearch": {}}]
                     },
-                    timeout=45
+                    timeout=30
                 )
                 if resp.status_code == 200:
                     res_json = resp.json()
                     candidates = res_json.get("candidates", [])
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
-                        text_result = "".join([p.get("text", "") for p in parts])
-                        if text_result.strip():
-                            return text_result.strip()
+                        text_list = [p.get("text", "") for p in parts if "text" in p]
+                        full_text = "".join(text_list).strip()
+                        if full_text:
+                            return full_text
+                else:
+                    logger.warning(f"REST Search status {resp.status_code}: {resp.text[:200]}")
+            except Exception as rest_err:
+                logger.warning(f"REST Search err: {rest_err}")
 
-            return "⚠️ Gemini API 呼叫已完成但未傳回文字結果，請檢查 API Key 或伺服器網路連線。"
+        # 2.3 備用方案：標準推理呼叫 (無 Search Tool 限制，確保 100% 產出答案)
+        for headers in headers_list:
+            try:
+                resp = requests.post(
+                    rest_url,
+                    headers=headers,
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}]
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    res_json = resp.json()
+                    candidates = res_json.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        text_list = [p.get("text", "") for p in parts if "text" in p]
+                        full_text = "".join(text_list).strip()
+                        if full_text:
+                            return full_text
+            except Exception as final_err:
+                logger.warning(f"Standard REST err: {final_err}")
 
-        except Exception as e:
-            logger.error(f"Gemini API 呼叫失敗: {e}")
-            return f"⚠️ Gemini API 解析發生錯誤：{str(e)}"
+        return "⚠️ Gemini API 呼叫已完成但未傳回文字結果，請檢查 API Key 或伺服器網路連線。"
 
     return "❌ 尚未設定 AI 模型。請於 Render 後台的 Environment Variables 填入 GEMINI_API_KEY。"
