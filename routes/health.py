@@ -1,6 +1,9 @@
 import logging
+import traceback
+import requests
+import urllib.parse
 from flask import Blueprint, render_template, request, jsonify
-from services.youtube_service import get_youtube_video_info, fetch_oembed_metadata, fetch_page_meta_description, fetch_transcript, extract_video_id
+from services.youtube_service import get_youtube_video_info, fetch_oembed_metadata, fetch_page_meta_description, fetch_transcript, extract_video_id, HEADERS
 from services.gemini_service import analyze_novel_info
 
 logger = logging.getLogger(__name__)
@@ -9,43 +12,54 @@ health_bp = Blueprint("health", __name__)
 
 @health_bp.route("/", methods=["GET"])
 def index():
-    """渲染前端網頁版介面 (無需使用者輸入 Key，直接貼 URL 即可查)"""
     return render_template("index.html")
 
 @health_bp.route("/health", methods=["GET"])
 def health_check():
-    """伺服器健康檢查 API"""
     return jsonify({
         "status": "online",
         "service": "YouTube Novel Finder",
         "version": "1.2.0"
     }), 200
 
-@health_bp.route("/api/debug_yt", methods=["GET", "POST"])
-def debug_yt():
-    """除錯專用：回傳每個步驟抓到的原始資料"""
+@health_bp.route("/api/debug_raw", methods=["GET", "POST"])
+def debug_raw():
     url = request.args.get("url") or (request.json or {}).get("url") or "https://youtu.be/6S_C1tA_Ljs"
     video_id = extract_video_id(url)
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
     
-    oembed = fetch_oembed_metadata(clean_url) if clean_url else {}
-    html_desc = fetch_page_meta_description(clean_url) if clean_url else ""
-    transcript = fetch_transcript(video_id) if video_id else ""
-    full_info = get_youtube_video_info(url)
+    debug_info = {}
     
-    return jsonify({
-        "input_url": url,
-        "video_id": video_id,
-        "clean_url": clean_url,
-        "oembed_result": oembed,
-        "html_desc_len": len(html_desc),
-        "transcript_len": len(transcript),
-        "full_info_result": full_info
-    }), 200
+    # 1. Test NoEmbed
+    try:
+        noembed_url = f"https://noembed.com/embed?url={clean_url}"
+        r = requests.get(noembed_url, headers=HEADERS, timeout=5)
+        debug_info["noembed_status"] = r.status_code
+        debug_info["noembed_data"] = r.json() if r.status_code == 200 else r.text[:200]
+    except Exception as e:
+        debug_info["noembed_err"] = str(e)
+        debug_info["noembed_trace"] = traceback.format_exc()
+
+    # 2. Test oEmbed
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe='')}&format=json"
+        r = requests.get(oembed_url, headers=HEADERS, timeout=5)
+        debug_info["youtube_oembed_status"] = r.status_code
+        debug_info["youtube_oembed_data"] = r.json() if r.status_code == 200 else r.text[:200]
+    except Exception as e:
+        debug_info["youtube_oembed_err"] = str(e)
+
+    # 3. Test Full Info
+    try:
+        full_info = get_youtube_video_info(url)
+        debug_info["full_info"] = full_info
+    except Exception as e:
+        debug_info["full_info_err"] = str(e)
+
+    return jsonify(debug_info), 200
 
 @health_bp.route("/api/search", methods=["POST"])
 def api_search():
-    """前端網頁 AJAX 搜尋 API 入口"""
     data = request.get_json() or {}
     youtube_url = data.get("url", "").strip()
 
