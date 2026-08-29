@@ -83,18 +83,20 @@ def analyze_novel_info(video_data: dict) -> str:
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是一位專業的中文網絡小說資料庫專家，精通各大小說平台作品，擅長從影片解說內容中精準識別小說名稱與作者。"
+                        "content": "你是一位專業的中文網絡小說資料庫專家，精通各大小說平台作品，擅長從影片解說內容中精準識別小說名稱與作者。直接回覆結果，不要輸出思考過程。"
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 temperature=0.2,
                 max_tokens=1024,
             )
+            import re
             result = chat_completion.choices[0].message.content.strip()
+            result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
             if result:
                 logger.info("Groq API 呼叫成功！")
                 return result
