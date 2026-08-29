@@ -58,3 +58,15 @@ def api_search():
     except Exception as e:
         logger.error(f"API 搜尋時發生錯誤: {e}")
         return jsonify({"error": f"伺服器處理失敗：{str(e)}"}), 500
+
+@health_bp.route("/api/debug_key", methods=["GET"])
+def debug_key():
+    import os
+    key = os.getenv("GEMINI_API_KEY", "")
+    return jsonify({
+        "key_exists": bool(key),
+        "key_length": len(key),
+        "key_prefix": key[:8] if key else "",
+        "key_suffix": key[-5:] if key else ""
+    })
+
