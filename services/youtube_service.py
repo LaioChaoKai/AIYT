@@ -12,15 +12,15 @@ HEADERS = {
 }
 
 def extract_video_id(url: str) -> str | None:
-    """從各種 YouTube URL 格式中解析出 11 位數的 Video ID (包含 ?si= 帶追蹤參數網址)"""
+    """從各種 YouTube URL 格式中解析出 Video ID (支援 8~12 字元，含 ?si= 帶追蹤參數網址)"""
     if not url:
         return None
         
     patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[\&\?\/]|$)',
-        r'youtu\.be\/([0-9A-Za-z_-]{11})',
-        r'youtube\.com\/shorts\/([0-9A-Za-z_-]{11})',
-        r'youtube\.com\/embed\/([0-9A-Za-z_-]{11})'
+        r'(?:v=|/)([0-9A-Za-z_-]{8,12})(?:[&?/]|$)',
+        r'youtu\.be/([0-9A-Za-z_-]{8,12})',
+        r'youtube\.com/shorts/([0-9A-Za-z_-]{8,12})',
+        r'youtube\.com/embed/([0-9A-Za-z_-]{8,12})'
     ]
     
     for pattern in patterns:

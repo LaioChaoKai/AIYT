@@ -40,7 +40,7 @@ def api_search():
         # 若未抓到標題與字幕，直接回傳抓取到的 raw 結構方便 debug
         if not video_data.get("title") and not video_data.get("transcript") and not video_data.get("description"):
             return jsonify({
-                "result": "❌ 無法取得影片的標題、說明欄或字幕內容，無法分析。",
+                "result": "❌ 無法取得此影片資訊。可能原因：\n1. 影片已刪除或設為私人\n2. 影片連結不完整（請直接從 YouTube 複製完整網址）\n3. 該影片受地區限制\n\n請確認網址正確後再試。",
                 "debug_video_data": video_data
             }), 200
 
