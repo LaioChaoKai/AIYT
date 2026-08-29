@@ -1,16 +1,16 @@
 import os
 import logging
+import requests
 
 logger = logging.getLogger(__name__)
 
 def analyze_novel_info(video_data: dict) -> str:
     """
-    使用 Google Gemini API 從影片標題、說明欄與字幕中解析小說名稱與詳細資訊
+    從影片標題、說明欄與字幕中解析小說名稱與詳細資訊。
+    支援：
+    1. 本地開源 AI 模型 (Ollama - Qwen / Llama / DeepSeek)，完全免 API Key！
+    2. Google Gemini API (讀取本地 .env，金鑰無須透漏給任何人)
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key or api_key == "your_gemini_api_key_here":
-        return "❌ 尚未設定 GEMINI_API_KEY，請先在 .env 檔案中填入有效的 Gemini API 金鑰。"
-        
     title = video_data.get("title", "")
     description = video_data.get("description", "")
     transcript = video_data.get("transcript", "")
@@ -48,24 +48,52 @@ def analyze_novel_info(video_data: dict) -> str:
 🎯 識別信心度：[高 / 中 / 低]
 """
 
-    try:
-        # 優先試用最新官方 google-genai SDK
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    use_ollama = os.getenv("USE_OLLAMA", "false").lower() == "true"
+    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
+
+    # 1. 優先方案：若啟用 USE_OLLAMA，呼叫本地完全免費開源 LLM (免 API Key)
+    if use_ollama:
         try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
+            logger.info(f"正在呼叫本地開源 Ollama 模型 ({ollama_model})...")
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": ollama_model,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=60
             )
-            return response.text.strip()
-        except ImportError:
-            # 備用 fallback 使用 google.generativeai
-            import google.generativeai as genai_legacy
-            genai_legacy.configure(api_key=api_key)
-            model = genai_legacy.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt)
-            return response.text.strip()
-            
-    except Exception as e:
-        logger.error(f"Gemini API 呼叫失敗: {e}")
-        return f"⚠️ AI 解析過程發生錯誤：{str(e)}"
+            if response.status_code == 200:
+                return response.json().get("response", "").strip()
+            else:
+                return f"⚠️ 本地 Ollama 回傳錯誤代碼: {response.status_code}"
+        except Exception as e:
+            logger.error(f"Ollama 連線失敗: {e}")
+            return f"❌ 本地 Ollama 未啟動，請先安裝並啟動 Ollama (ollama run {ollama_model})，或於 .env 中設定 GEMINI_API_KEY。"
+
+    # 2. 備用方案：若有 GEMINI_API_KEY (存在您電腦本地的 .env 中，不用透漏給任何人)
+    if api_key and api_key != "your_gemini_api_key_here":
+        try:
+            # 優先試用最新官方 google-genai SDK
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt
+                )
+                return response.text.strip()
+            except ImportError:
+                import google.generativeai as genai_legacy
+                genai_legacy.configure(api_key=api_key)
+                model = genai_legacy.GenerativeModel("gemini-1.5-flash")
+                response = model.generate_content(prompt)
+                return response.text.strip()
+        except Exception as e:
+            logger.error(f"Gemini API 呼叫失敗: {e}")
+            return f"⚠️ Gemini API 解析發生錯誤：{str(e)}"
+
+    return "❌ 尚未設定 AI 模型。您可以：\n1. 直接在您電腦上的 .env 檔案中填入 GEMINI_API_KEY（自己貼即可，無需傳給任何人）。\n2. 或在 .env 設定 USE_OLLAMA=true 使用本地免費開源 AI。"
