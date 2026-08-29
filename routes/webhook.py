@@ -8,7 +8,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, ReplyMessageRequest, PushMessageRequest, TextMessage
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent
 
 from services.youtube_service import get_youtube_video_info
 from services.gemini_service import analyze_novel_info
@@ -24,6 +24,15 @@ CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
+
+WELCOME_MESSAGE = (
+    "👋 歡迎加入「YouTube 小說名稱 AI 搜尋器」！\n\n"
+    "📖 使用教學與說明：\n"
+    "1️⃣ 請直接在此對話框中貼上任何 YouTube 小說或動漫解說影片網址（例如 https://youtu.be/...）。\n"
+    "2️⃣ AI 將會自動解析影片標題、說明欄與字幕，幫您精準找出原始小說名稱、作者與主角資訊！\n\n"
+    "🌐 您也可以隨時使用我們的免登入網頁版：\n"
+    "https://ckai.ischaokai.online/"
+)
 
 def process_youtube_url_async(user_id: str, youtube_url: str):
     """背景非同步處理 YouTube 解析，避免 LINE Webhook 回應超時"""
@@ -77,6 +86,19 @@ def callback():
 
     return "OK", 200
 
+@handler.add(FollowEvent)
+def handle_follow(event):
+    """當使用者加好友或解除封鎖時，自動傳送歡迎與使用說明訊息"""
+    logger.info(f"新使用者加好友: {event.source.user_id}")
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=WELCOME_MESSAGE)]
+            )
+        )
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_message = event.message.text.strip()
@@ -98,7 +120,7 @@ def handle_message(event):
                 )
             )
             
-        # 開啟 Thread 在背景非同步執行分析並 Push 訊息
+        # 開開啟 Thread 在背景非同步執行分析並 Push 訊息
         thread = threading.Thread(
             target=process_youtube_url_async,
             args=(user_id, youtube_url)
@@ -106,16 +128,11 @@ def handle_message(event):
         thread.start()
     else:
         # 一般文字訊息回覆引導說明
-        welcome_text = (
-            "👋 嗨！我是「YouTube 小說名稱搜尋器」機器人！\n\n"
-            "請傳送一個 YouTube 解說影片（包含 Shorts 或一般影片）的網址給我，"
-            "我會自動分析影片標題、說明欄與字幕，幫你找出原始小說名稱、作者與主角資訊喔！"
-        )
         with ApiClient(configuration) as api_client:
             line_bot_api = MessagingApi(api_client)
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=welcome_text)]
+                    messages=[TextMessage(text=WELCOME_MESSAGE)]
                 )
             )
