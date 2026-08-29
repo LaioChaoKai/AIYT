@@ -5,7 +5,7 @@ services:
     region: singapore
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app -b 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --bind 0.0.0.0:10000
     envVars:
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
