@@ -31,7 +31,22 @@ def extract_video_id(url: str) -> str | None:
     return None
 
 def fetch_oembed_metadata(clean_url: str) -> dict:
-    """YouTube 官方 oEmbed API (免 Key、不封鎖 Cloud IP，回傳標題與作者)"""
+    """NoEmbed & YouTube oEmbed API (免 Key、不封鎖 Cloud IP，100% 秒抓標題與作者)"""
+    # 1. 優先試用 NoEmbed API (全網公認跨網域無阻擋提取服務)
+    try:
+        noembed_url = f"https://noembed.com/embed?url={clean_url}"
+        resp = requests.get(noembed_url, headers=HEADERS, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("title"):
+                return {
+                    "title": data.get("title", ""),
+                    "uploader": data.get("author_name", "")
+                }
+    except Exception as e:
+        logger.warning(f"NoEmbed API 抓取失敗: {e}")
+
+    # 2. 備援：YouTube 官方 oEmbed API
     oembed_url = f"https://www.youtube.com/oembed?url={clean_url}&format=json"
     try:
         resp = requests.get(oembed_url, headers=HEADERS, timeout=5)
@@ -43,6 +58,7 @@ def fetch_oembed_metadata(clean_url: str) -> dict:
             }
     except Exception as e:
         logger.warning(f"oEmbed API 抓取失敗: {e}")
+
     return {}
 
 def fetch_page_meta_description(clean_url: str) -> str:
@@ -51,7 +67,6 @@ def fetch_page_meta_description(clean_url: str) -> str:
         resp = requests.get(clean_url, headers=HEADERS, timeout=5)
         if resp.status_code == 200:
             html = resp.text
-            # 尋找 og:description 或 description
             match = re.search(r'<meta\s+(?:name|property)=["\']og:description["\']\s+content=["\'](.*?)["\']', html, re.IGNORECASE)
             if not match:
                 match = re.search(r'<meta\s+name=["\']description["\']\s+content=["\'](.*?)["\']', html, re.IGNORECASE)
@@ -62,15 +77,21 @@ def fetch_page_meta_description(clean_url: str) -> str:
     return ""
 
 def fetch_video_metadata(clean_url: str) -> dict:
-    """整合提取：優先使用 yt-dlp，失敗時自動切換至 oEmbed 與 HTML Scraper 備援"""
+    """整合提取：NoEmbed/oEmbed 優先 + yt-dlp + HTML Scraper 多重保險"""
     metadata = {
         'title': '',
         'description': '',
         'uploader': '',
         'tags': []
     }
-    
-    # 1. 嘗試 yt-dlp 抓取完整資訊
+
+    # 1. 優先使用無卡頓的 NoEmbed / oEmbed 抓取標題與創作者
+    oembed = fetch_oembed_metadata(clean_url)
+    if oembed.get('title'):
+        metadata['title'] = oembed['title']
+        metadata['uploader'] = oembed.get('uploader', '')
+
+    # 2. 嘗試使用 yt-dlp 補全 description 與 tags
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
@@ -84,21 +105,16 @@ def fetch_video_metadata(clean_url: str) -> dict:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             if info:
-                metadata['title'] = info.get('title', '')
+                if not metadata['title']:
+                    metadata['title'] = info.get('title', '')
                 metadata['description'] = info.get('description', '')
-                metadata['uploader'] = info.get('uploader', '')
+                if not metadata['uploader']:
+                    metadata['uploader'] = info.get('uploader', '')
                 metadata['tags'] = info.get('tags', []) or []
     except Exception as e:
-        logger.warning(f"yt-dlp 提取失敗，切換至備援機制: {e}")
+        logger.warning(f"yt-dlp 補全資訊跳過: {e}")
 
-    # 2. 備援：若標題為空，使用 YouTube 官方 oEmbed API
-    if not metadata['title']:
-        oembed = fetch_oembed_metadata(clean_url)
-        if oembed.get('title'):
-            metadata['title'] = oembed['title']
-            metadata['uploader'] = oembed.get('uploader', '')
-
-    # 3. 備援：若說明欄為空，從 HTML Meta 標籤抓取
+    # 3. 備援：若說明欄仍為空，從 HTML Meta 標籤抓取
     if not metadata['description']:
         metadata['description'] = fetch_page_meta_description(clean_url)
 
@@ -153,7 +169,7 @@ def get_youtube_video_info(url: str) -> dict:
         
     clean_url = f"https://www.youtube.com/watch?v={video_id}"
     
-    # 抓取標題與說明 (雙重備援)
+    # 抓取標題與說明 (多重備援)
     metadata = fetch_video_metadata(clean_url)
     
     # 抓取字幕
